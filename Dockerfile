@@ -12,12 +12,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Pick up Debian security fixes released since the base image was published.
+# Trivy flagged an OS library (libpcre2) with a fix available that the base image didn't have yet.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # A normal user with no password and no login shell. The app never runs as root.
 RUN groupadd --system app && useradd --system --gid app --no-create-home --shell /usr/sbin/nologin app
 
 # Install packages first, in their own layer, so code changes don't reinstall them.
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Then remove pip itself: the running app never installs anything, and pip bundles its own
+# copies of urllib3, msgpack and setuptools that Trivy flagged. Less software, fewer holes.
+RUN pip install -r requirements.txt \
+    && pip uninstall -y pip
 
 # Copy the app. Files belong to root, so the running app can't rewrite its own code.
 COPY . .

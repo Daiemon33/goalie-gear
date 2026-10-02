@@ -1,5 +1,7 @@
 # Goalie Gear Room
 
+[![Build and security scan](https://github.com/Daiemon33/goalie-gear/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/Daiemon33/goalie-gear/actions/workflows/security.yml)
+
 A web app that tracks a hockey club's shared goalie equipment: what the club owns, who has it, and what needs repair. I'm using it as the base for a hands-on DevOps project: containerizing it, deploying it to AWS with Terraform, and wrapping it in a secure CI/CD pipeline.
 
 **Stack:** Python, Flask, SQLite, Pillow, gunicorn, Docker. Planned: AWS (ECS Fargate, ALB, S3, RDS), Terraform, GitHub Actions, Trivy, Checkov, CloudWatch.
@@ -40,8 +42,8 @@ The key lesson of the move: a container's disk is temporary. When ECS replaces a
 | Containerize with Docker (non-root user, gunicorn, health check) | Done |
 | Public repo with secrets and data kept out by `.gitignore` | Done |
 | Terraform: VPC, ECS Fargate, ALB, S3, managed database | Planned |
-| GitHub Actions CI/CD, authenticating to AWS with OIDC (no stored AWS keys) | Planned |
-| Security scans: Trivy (image and dependencies), Checkov (Terraform) | Planned |
+| Security scans in GitHub Actions: Trivy (image and dependencies), Checkov (Dockerfile, workflows, secrets, Terraform) | Done |
+| GitHub Actions deploy to AWS with OIDC (no stored AWS keys) | Planned |
 | CloudWatch logs, metrics and alarms | Planned |
 | Map security controls to NIST SP 800-53 | Planned |
 
@@ -100,7 +102,26 @@ Secrets are never written in the code or the image. Locally they come from `-e` 
 - **SQL injection prevented** by using parameterized queries everywhere.
 - **Admin login hardening:** constant-time password comparison, an 8-hour session limit, and a session tied to a fingerprint of the current password (see below).
 - **Privacy by default:** phone numbers are masked server-side, and the app asks for a first name or player number, since many club members are minors.
+- **Every push is scanned** (see below). The image ships without `pip` and with current Debian security fixes.
 - **Known gap:** editing gear doesn't require a login yet. The admin login currently protects phone numbers only. Protecting write actions is on the list before a public deployment.
+
+## CI security scanning
+
+[`.github/workflows/security.yml`](.github/workflows/security.yml) runs on every push and pull request to `main`:
+
+| Job | What it does | Fails the run when |
+|---|---|---|
+| Trivy | Builds the image, then scans its OS packages, Python packages, secrets and image config | A HIGH or CRITICAL problem has a fix available |
+| Checkov | Scans the Dockerfile, the workflow files, committed secrets, and Terraform (once added) | Any check fails |
+
+All findings, at every severity, are uploaded to the repo's **Security → Code scanning** tab, so lower-severity issues are visible without blocking work.
+
+How the pipeline itself is hardened:
+- **Least privilege:** the workflow can only read the code. Each scan job adds just `security-events: write` to upload results. No secrets are used.
+- **Actions pinned to commit hashes**, not tags. A tag can be re-pointed at malicious code (this happened to real, popular actions); a hash can't.
+- `persist-credentials: false` so the GitHub token isn't left on disk for later steps.
+
+**Accepted risk: unfixed OS vulnerabilities.** The Debian base image still reports HIGH vulnerabilities that Debian has not released a fix for. There's nothing to upgrade to, so the gate ignores them (`ignore-unfixed`) rather than blocking every build. They stay visible in the Security tab, and the `apt-get upgrade` step picks up fixes as soon as Debian publishes them. Reviewing a slimmer base image (for example a distroless image) is a future step.
 
 ## What broke and how I fixed it
 
@@ -113,6 +134,9 @@ When I added phone numbers, the app adds the new columns to an existing database
 **3. Changing the admin password didn't log anyone out.**
 The login cookie only said "this person is admin", so an old cookie stayed valid after the password changed. I changed it to store a one-way fingerprint (HMAC) of the current password instead. When the password is rotated, the fingerprint no longer matches and every old session stops working. Sessions also expire after 8 hours. This matters for credential rotation: rotating a secret should actually cut off whoever had the old one.
 
+**4. Trivy flagged libraries I never installed.**
+The first scan found HIGH vulnerabilities in `urllib3`, `msgpack` and `setuptools`, which aren't in `requirements.txt`. Tracing them showed they were copies bundled *inside pip*, the package installer. The app never installs anything at runtime, so I uninstall pip after installing the app's packages. That removed all four Python findings and shrank the image. A fifth finding was in an OS library (`libpcre2`) where Debian had a fix the base image didn't have yet, so the build now runs `apt-get upgrade`. Lesson: scan the image you actually ship, not just your requirements file, and remove tools the running app doesn't need.
+
 ## Project layout
 
 ```
@@ -122,5 +146,6 @@ static/style.css    Styling
 requirements.txt    Pinned Python packages
 Dockerfile          Production container image
 .dockerignore       Keeps local and private files out of the image
+.github/workflows/  CI pipeline: build, Trivy and Checkov scans
 .gitignore          Keeps data, photos and secrets out of GitHub
 ```
