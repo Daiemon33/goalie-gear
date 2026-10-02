@@ -15,6 +15,7 @@ data/
 # Secrets
 .env
 .env.*
+!.env.example
 
 # Editor and OS clutter
 .vscode/

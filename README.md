@@ -4,7 +4,7 @@
 
 A web app that tracks a hockey club's shared goalie equipment: what the club owns, who has it, and what needs repair. I'm using it as the base for a hands-on DevOps project: containerizing it, deploying it to AWS with Terraform, and wrapping it in a secure CI/CD pipeline.
 
-**Stack:** Python, Flask, SQLite, Pillow, gunicorn, Docker. Planned: AWS (ECS Fargate, ALB, S3, RDS), Terraform, GitHub Actions, Trivy, Checkov, CloudWatch.
+**Stack:** Python, Flask, SQLite or PostgreSQL, Pillow, boto3 (S3), gunicorn, Docker, Docker Compose. Planned: AWS (ECS Fargate, ALB, S3, RDS), Terraform, GitHub Actions, Trivy, Checkov, CloudWatch.
 
 ## What the app does
 
@@ -15,11 +15,16 @@ A web app that tracks a hockey club's shared goalie equipment: what the club own
 
 ## Architecture
 
-Today it runs as a single container:
+The same image runs in two modes, picked by environment variables:
 
 ```
+Simple mode (default): one container, data on a disk volume
 Browser ──► gunicorn (2 workers) ──► Flask app ──► SQLite file  (/app/data/gear.db)
                                               └──► photo files  (/app/data/uploads)
+
+Cloud mode (DATABASE_URL and S3_BUCKET set): the container keeps nothing
+Browser ──► gunicorn ──► Flask app ──► PostgreSQL           (RDS on AWS, a container locally)
+                                  └──► private S3 bucket    (S3 on AWS, SeaweedFS locally)
 ```
 
 Target architecture on AWS:
@@ -33,13 +38,14 @@ Browser ──► Application Load Balancer (HTTPS)
                         └──► CloudWatch Logs, metrics and alarms
 ```
 
-The key lesson of the move: a container's disk is temporary. When ECS replaces a task, anything written inside it is gone, so the database and photos have to move to managed services.
+The key lesson of the move: a container's disk is temporary. When ECS replaces a task, anything written inside it is gone, so the database and photos have to move to managed services. Cloud mode does exactly that, and `docker-compose.yml` lets me prove it on my own computer before spending anything on AWS: I can delete every container, start fresh ones, and the gear, checkout history and photos are all still there.
 
 ## DevOps roadmap
 
 | Step | Status |
 |---|---|
 | Containerize with Docker (non-root user, gunicorn, health check) | Done |
+| Cloud-ready app: PostgreSQL and S3 support, tested locally with Docker Compose | Done |
 | Public repo with secrets and data kept out by `.gitignore` | Done |
 | Terraform: VPC, ECS Fargate, ALB, S3, managed database | Planned |
 | Security scans in GitHub Actions: Trivy (image and dependencies), Checkov (Dockerfile, workflows, secrets, Terraform) | Done |
@@ -84,12 +90,35 @@ docker run -d --name goalie-gear -p 8000:8000 \
 
 Open http://localhost:8000. The named volume `goalie-gear-data` keeps the database and photos when the container is replaced.
 
+## Run it in cloud mode locally (Docker Compose)
+
+This runs the app with PostgreSQL and S3-compatible storage, the way it will run on AWS, with no AWS account:
+
+| On AWS (planned) | Locally in `docker-compose.yml` |
+|---|---|
+| ECS Fargate task | `app`: the same image |
+| RDS PostgreSQL | `db`: PostgreSQL 17 container, not reachable from outside |
+| S3 bucket | `storage`: SeaweedFS, an open-source server that speaks the S3 API |
+| Bucket created by Terraform | `storage-setup`: creates the bucket once, then exits |
+
+```bash
+cp .env.example .env      # then put long random values in .env
+docker compose up -d --build
+```
+
+Open http://localhost:8000. `docker compose down` removes every container but keeps the data in named volumes; `docker compose up -d` brings it all back. `docker compose down -v` wipes the data too.
+
+The app container runs with a **read-only file system**: it has nowhere to keep data even if it tried.
+
 ### Environment variables
 
 | Variable | Purpose | If not set |
 |---|---|---|
 | `SECRET_KEY` | Signs the session cookie | Falls back to a dev-only value, and admin login is refused |
 | `ADMIN_PASSWORD` | Password for the admin login | Nobody can log in, and phone numbers stay masked for everyone |
+| `DATABASE_URL` | PostgreSQL connection, e.g. `postgresql://user:pass@host:5432/db?sslmode=require` | Uses the SQLite file |
+| `S3_BUCKET` | Name of the private bucket for photos | Uses the local `uploads` folder |
+| `AWS_ENDPOINT_URL_S3` | Sends S3 calls somewhere other than AWS (only for local testing) | Real AWS S3 |
 
 Secrets are never written in the code or the image. Locally they come from `-e` flags; on AWS they will come from Secrets Manager.
 
@@ -99,7 +128,10 @@ Secrets are never written in the code or the image. Locally they come from `-e` 
 - **Small, pinned base image** (`python:3.13-slim`) and pinned package versions, so builds are repeatable and scan results are meaningful.
 - **`.dockerignore` and `.gitignore`** keep the database, photos, virtual environment and `.env` files out of both the image and this repository.
 - **Uploads are never trusted.** Every photo is re-opened and re-saved as a fresh JPEG with a random name, which strips hidden content and avoids user-controlled file names. Uploads are capped at 16 MB.
-- **SQL injection prevented** by using parameterized queries everywhere.
+- **SQL injection prevented** by using parameterized queries everywhere, in both SQLite and PostgreSQL.
+- **Photos bucket stays private.** The browser never talks to S3: it asks the app, and the app fetches the photo with its own permissions. The app only serves names it could have created (32 random hex characters + `.jpg`), so nobody can use it to read other files or objects.
+- **No cloud keys in the app.** boto3 picks up credentials by itself. On AWS that will be the ECS task role (short-lived, rotated automatically); locally it's a throwaway login for SeaweedFS from `.env`.
+- **Database not exposed:** in Compose, PostgreSQL has no published port, so only the app can reach it, like RDS in a private subnet. The app's port is bound to `127.0.0.1` only.
 - **Admin login hardening:** constant-time password comparison, an 8-hour session limit, and a session tied to a fingerprint of the current password (see below).
 - **Privacy by default:** phone numbers are masked server-side, and the app asks for a first name or player number, since many club members are minors.
 - **Every push is scanned** (see below). The image ships without `pip` and with current Debian security fixes.
@@ -137,10 +169,19 @@ The login cookie only said "this person is admin", so an old cookie stayed valid
 **4. Trivy flagged libraries I never installed.**
 The first scan found HIGH vulnerabilities in `urllib3`, `msgpack` and `setuptools`, which aren't in `requirements.txt`. Tracing them showed they were copies bundled *inside pip*, the package installer. The app never installs anything at runtime, so I uninstall pip after installing the app's packages. That removed all four Python findings and shrank the image. A fifth finding was in an OS library (`libpcre2`) where Debian had a fix the base image didn't have yet, so the build now runs `apt-get upgrade`. Lesson: scan the image you actually ship, not just your requirements file, and remove tools the running app doesn't need.
 
+**5. The S3 stand-in I planned to use had disappeared.**
+The usual way to fake S3 locally is MinIO. When I wrote the Compose file, `docker pull minio/minio` failed with "repository does not exist", and the Quay.io copy needed a login: MinIO stopped publishing free images. I switched to SeaweedFS, another open-source server that speaks the S3 API, and checked that it refuses requests without the right keys before relying on it. Because the app only talks the standard S3 API through boto3, nothing in the app changed. Lessons: pin and check your dependencies, including the tools around the app, and code against a standard interface so a supplier can be swapped.
+
+**6. Several copies starting at once, again (prevented this time).**
+Lesson 2 came back in a new form: on PostgreSQL, two workers running `CREATE TABLE IF NOT EXISTS` at the same instant can still collide. On AWS there could also be several containers starting together. Before the first run, I made startup take a PostgreSQL *advisory lock*, so the copies take turns setting up the tables. The column upgrade uses PostgreSQL's `ADD COLUMN IF NOT EXISTS`, which is safe to repeat. I tested the upgrade path on both databases by starting the app against an old copy of the tables.
+
 ## Project layout
 
 ```
-app.py              Routes, database, photo handling (read top to bottom)
+app.py              Routes, database (SQLite or PostgreSQL), photo checks (read top to bottom)
+storage.py          Where photos are kept: local folder or S3 bucket
+docker-compose.yml  Cloud mode on your computer: app + PostgreSQL + S3 stand-in
+.env.example        Template for the local secrets file (.env, never committed)
 templates/          HTML pages (Jinja)
 static/style.css    Styling
 requirements.txt    Pinned Python packages

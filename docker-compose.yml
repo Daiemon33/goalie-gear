@@ -1,0 +1,101 @@
+# Runs the app the way it will run on AWS, on your own computer, with no AWS account.
+#
+#   AWS (planned)                    Here
+#   ECS Fargate task          ->     app       (the same image)
+#   RDS PostgreSQL            ->     db        (PostgreSQL in a container)
+#   S3 bucket for photos      ->     storage   (SeaweedFS, which speaks the S3 API)
+#
+# Start:   copy .env.example to .env, fill it in, then: docker compose up -d --build
+# Open:    http://localhost:8000
+# Stop:    docker compose down        (keeps the data)
+# Wipe:    docker compose down -v     (deletes the database and photos too)
+
+name: goalie-gear
+
+# Settings the app and the bucket setup both need. Locally, boto3 logs in to
+# SeaweedFS with these keys. On AWS there are no keys: the ECS task role is used.
+x-s3-settings: &s3-settings
+  S3_BUCKET: goalie-gear-photos
+  AWS_ENDPOINT_URL_S3: http://storage:8333 # send S3 calls to SeaweedFS, not AWS
+  AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+  AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+  AWS_DEFAULT_REGION: us-east-1
+
+services:
+  app:
+    build: .
+    image: goalie-gear:local
+    ports:
+      - "127.0.0.1:8000:8000" # only reachable from this computer
+    environment:
+      <<: *s3-settings
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      DATABASE_URL: postgresql://goalie:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/goalie
+    # The app's own disk is read-only, like it can be on ECS. Everything it
+    # keeps goes to the database or the bucket. /tmp is scratch space for gunicorn.
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      db:
+        condition: service_healthy
+      storage-setup:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  db:
+    image: postgres:17.11-alpine # RDS offers PostgreSQL 17 as well
+    environment:
+      POSTGRES_USER: goalie
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: goalie
+    volumes:
+      - db-data:/var/lib/postgresql/data # survives the container being replaced
+    # No ports: only the app can reach the database, like RDS in a private subnet.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U goalie -d goalie"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  storage:
+    image: chrislusf/seaweedfs:4.48
+    command: ["mini", "-dir=/data"]
+    environment:
+      # SeaweedFS turns these into its only login. Requests without them are refused.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY in .env}
+    volumes:
+      - photo-data:/data # survives the container being replaced
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Runs once and exits: creates the photo bucket if it isn't there yet.
+  # On AWS, Terraform creates the bucket instead, and the app is not allowed to.
+  storage-setup:
+    image: goalie-gear:local
+    environment: *s3-settings
+    command:
+      - python
+      - -c
+      - |
+        import os, boto3
+        from botocore.config import Config
+        s3 = boto3.client("s3", config=Config(s3={"addressing_style": "path"}))
+        bucket = os.environ["S3_BUCKET"]
+        if bucket not in [b["Name"] for b in s3.list_buckets()["Buckets"]]:
+            s3.create_bucket(Bucket=bucket)
+        print("Bucket ready:", bucket)
+    depends_on:
+      storage:
+        condition: service_healthy
+
+volumes:
+  db-data:
+  photo-data:

@@ -6,8 +6,10 @@ __pycache__/
 .git/
 .github/
 .env
+.env.*
 *.db
 uploads/
 data/
 Dockerfile
 .dockerignore
+docker-compose.yml
