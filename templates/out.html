@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Checked out{% endblock %}
+{% block content %}
+<h1>Checked out</h1>
+
+{% if items %}
+  <p class="summary">{{ items|length }} {{ 'piece is' if items|length == 1 else 'pieces are' }} out right now, oldest first.</p>
+  <ul class="outlist">
+    {% for i in items %}
+      <li>
+        <a href="{{ url_for('item_detail', item_id=i['id']) }}">
+          {% if i['photo'] %}
+            <img src="{{ url_for('uploaded_file', filename=i['photo']) }}" alt="">
+          {% else %}
+            <span class="nophoto small">No photo</span>
+          {% endif %}
+          <span class="out-text">
+            <strong>{{ i['name'] }}</strong>
+            <span class="meta">With {{ i['held_by'] }}{% if i['held_by_phone'] %} ({{ i['held_by_phone']|phone }}){% endif %} since {{ i['out_since']|pretty_date }}</span>
+          </span>
+          <span class="days">{{ i['out_since']|days_since }} days</span>
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">Everything is in the gear room.</p>
+{% endif %}
+{% endblock %}

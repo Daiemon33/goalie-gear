@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Admin login{% endblock %}
+{% block content %}
+<h1>Admin login</h1>
+<p>Log in to see full contact phone numbers.</p>
+
+<form class="stack" method="post" action="{{ url_for('login') }}">
+  <label>Password
+    <input type="password" name="password" required autocomplete="current-password">
+  </label>
+  <button class="btn" type="submit">Log in</button>
+</form>
+{% endblock %}

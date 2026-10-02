@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit gear' if editing else 'Add gear' }}{% endblock %}
+{% block content %}
+<h1>{{ 'Edit gear' if editing else 'Add gear' }}</h1>
+
+<form class="stack" method="post" enctype="multipart/form-data"
+      action="{{ url_for('edit_item', item_id=item['id']) if editing else url_for('new_item') }}">
+
+  <label>Name
+    <input type="text" name="name" maxlength="100" required
+           placeholder="Senior pads, white and blue"
+           value="{{ item['name'] if item else '' }}">
+  </label>
+
+  <label>Category
+    <select name="category" required>
+      <option value="">Choose one</option>
+      {% for c in CATEGORIES %}
+        <option value="{{ c }}" {{ 'selected' if item and item['category'] == c }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Size
+    <input type="text" name="size" maxlength="30" placeholder="34 + 1"
+           value="{{ item['size'] if item and item['size'] else '' }}">
+  </label>
+
+  <label>Condition
+    <select name="condition" required>
+      <option value="">Choose one</option>
+      {% for c in CONDITIONS %}
+        <option value="{{ c }}" {{ 'selected' if item and item['condition'] == c }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Notes
+    <textarea name="notes" rows="3" maxlength="1000"
+              placeholder="Strap replaced last season. Fits a 5'6&quot; goalie.">{{ item['notes'] if item and item['notes'] else '' }}</textarea>
+  </label>
+
+  <label>Photo
+    <input type="file" name="photo" accept="image/*">
+  </label>
+  {% if editing and item['photo'] %}
+    <div class="current-photo">
+      <img src="{{ url_for('uploaded_file', filename=item['photo']) }}" alt="Current photo">
+      <label class="inline"><input type="checkbox" name="remove_photo"> Remove this photo</label>
+      <p class="meta">Choosing a new photo above replaces this one.</p>
+    </div>
+  {% endif %}
+
+  <div class="actions">
+    <button class="btn" type="submit">{{ 'Save changes' if editing else 'Add gear' }}</button>
+    <a class="btn secondary" href="{{ url_for('item_detail', item_id=item['id']) if editing else url_for('index') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

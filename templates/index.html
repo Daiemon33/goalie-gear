@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Goalie gear</h1>
+<p class="summary">
+  {{ total }} {{ 'piece' if total == 1 else 'pieces' }}.
+  {{ counts.available }} available, {{ counts.out }} checked out, {{ counts.repair }} need repair.
+</p>
+
+<form class="filters" method="get">
+  <label>Category
+    <select name="category">
+      <option value="">All</option>
+      {% for c in CATEGORIES %}
+        <option value="{{ c }}" {{ 'selected' if c == selected_category }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Status
+    <select name="status">
+      <option value="">All</option>
+      {% for key, label in STATUS_LABELS.items() %}
+        <option value="{{ key }}" {{ 'selected' if key == selected_status }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button class="btn secondary" type="submit">Filter</button>
+</form>
+
+{% if items %}
+  <div class="grid">
+    {% for i in items %}
+      <a class="card" href="{{ url_for('item_detail', item_id=i['id']) }}">
+        <div class="thumb">
+          {% if i['photo'] %}
+            <img src="{{ url_for('uploaded_file', filename=i['photo']) }}" alt="{{ i['name'] }}" loading="lazy">
+          {% else %}
+            <span class="nophoto">No photo</span>
+          {% endif %}
+          <span class="tag {{ i['status'] }}">{{ STATUS_LABELS[i['status']] }}</span>
+        </div>
+        <div class="card-body">
+          <h2>{{ i['name'] }}</h2>
+          <p class="meta">{{ i['category'] }}{% if i['size'] %}, size {{ i['size'] }}{% endif %}</p>
+          {% if i['status'] == 'out' %}<p class="meta">With {{ i['held_by'] }}</p>{% endif %}
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+{% elif total == 0 %}
+  <p class="empty">The gear room is empty. <a href="{{ url_for('new_item') }}">Add the first piece</a> and snap a photo of it.</p>
+{% else %}
+  <p class="empty">Nothing matches those filters. <a href="{{ url_for('index') }}">Show all gear</a>.</p>
+{% endif %}
+{% endblock %}

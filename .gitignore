@@ -1,0 +1,23 @@
+# Local Python environment and caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Data the app creates while running. It can hold names and phone numbers,
+# so it never goes to GitHub.
+*.db
+*.sqlite
+*.sqlite3
+uploads/
+data/
+
+# Secrets
+.env
+.env.*
+
+# Editor and OS clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

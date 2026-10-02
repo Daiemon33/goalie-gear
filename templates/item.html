@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ item['name'] }}{% endblock %}
+{% block content %}
+<p class="crumb"><a href="{{ url_for('index') }}">All gear</a></p>
+
+<div class="detail">
+  <div class="photo">
+    {% if item['photo'] %}
+      <img src="{{ url_for('uploaded_file', filename=item['photo']) }}" alt="{{ item['name'] }}">
+    {% else %}
+      <div class="nophoto big">No photo yet</div>
+    {% endif %}
+  </div>
+
+  <div class="info">
+    <h1>{{ item['name'] }}</h1>
+    <p><span class="tag {{ item['status'] }}">{{ STATUS_LABELS[item['status']] }}</span></p>
+
+    <dl>
+      <dt>Category</dt><dd>{{ item['category'] }}</dd>
+      {% if item['size'] %}<dt>Size</dt><dd>{{ item['size'] }}</dd>{% endif %}
+      <dt>Condition</dt><dd>{{ item['condition'] }}</dd>
+      {% if item['status'] == 'out' %}
+        <dt>With</dt><dd>{{ item['held_by'] }}</dd>
+        {% if item['held_by_phone'] %}
+          <dt>Phone</dt>
+          <dd>{% if is_admin %}<a href="tel:{{ item['held_by_phone'] }}">{{ item['held_by_phone'] }}</a>{% else %}{{ item['held_by_phone']|phone }}{% endif %}</dd>
+        {% endif %}
+        <dt>Since</dt><dd>{{ item['out_since']|pretty_date }} ({{ item['out_since']|days_since }} days)</dd>
+      {% endif %}
+    </dl>
+
+    {% if item['notes'] %}<p class="notes">{{ item['notes'] }}</p>{% endif %}
+
+    <section class="panel">
+      {% if item['status'] == 'available' %}
+        <form class="stack" method="post" action="{{ url_for('checkout', item_id=item['id']) }}">
+          <label>Who is taking it?
+            <input type="text" name="person" maxlength="100" required placeholder="Parent or Guardian Full Name">
+          </label>
+          <label>Contact phone
+            <input type="tel" name="phone" maxlength="30" required placeholder="555-123-4567">
+          </label>
+          <button class="btn" type="submit">Check out</button>
+        </form>
+      {% elif item['status'] == 'out' %}
+        <form class="stack" method="post" action="{{ url_for('return_item', item_id=item['id']) }}">
+          <label class="inline"><input type="checkbox" name="needs_repair"> Came back damaged, needs repair</label>
+          <button class="btn" type="submit">Return</button>
+        </form>
+      {% endif %}
+
+      {% if item['status'] != 'out' %}
+        <form method="post" action="{{ url_for('toggle_repair', item_id=item['id']) }}">
+          <button class="btn secondary" type="submit">
+            {{ 'Mark as repaired' if item['status'] == 'repair' else 'Flag for repair' }}
+          </button>
+        </form>
+      {% endif %}
+    </section>
+
+    <div class="actions">
+      <a class="btn secondary" href="{{ url_for('edit_item', item_id=item['id']) }}">Edit</a>
+      <form method="post" action="{{ url_for('delete_item', item_id=item['id']) }}"
+            onsubmit="return confirm('Delete this item and its photo? This cannot be undone.');">
+        <button class="btn danger" type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<h2>History</h2>
+{% if history %}
+  <table>
+    <thead><tr><th>Person</th><th>Phone</th><th>Out</th><th>Returned</th></tr></thead>
+    <tbody>
+      {% for h in history %}
+        <tr>
+          <td>{{ h['person'] }}</td>
+          <td>{{ h['phone']|phone }}</td>
+          <td>{{ h['out_at']|pretty_date }}</td>
+          <td>{{ h['returned_at']|pretty_date if h['returned_at'] else 'Still out' }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p class="empty">This piece has not been checked out yet.</p>
+{% endif %}
+{% endblock %}
